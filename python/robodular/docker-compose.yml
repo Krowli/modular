@@ -1,0 +1,164 @@
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # roboomp orchestrator
+  #
+  # NOTE: `env_file:` is INTENTIONALLY ABSENT. We never want the gh-proxy's
+  # PAT (`GITHUB_TOKEN` in .env) to leak into this container's environment.
+  # Every variable below is an explicit allowlist; compose still reads `.env`
+  # for `${VAR}` interpolation, but only the keys listed here flow into the
+  # container. Adding a new secret means an explicit compose-level decision
+  # about which container is allowed to see it.
+  # ───────────────────────────────────────────────────────────────────────────
+  robodular:
+    build:
+      # pi root: gives the web-builder stage access to the workspace
+      # bun.lock + catalog (web/package.json refs `catalog:` versions).
+      # python/robodular/data and pi-root excludes are filtered via
+      # Dockerfile.robodular.dockerignore at the context root.
+      context: ../..
+      dockerfile: Dockerfile.robodular
+      args:
+        # Tag of the pre-built pi-base image produced by `bun run pi:image`
+        # (sources: pi root /Dockerfile). Override per-environment as needed.
+        PI_BASE: modular/pi:dev
+    image: robodular:dev
+    container_name: robodular
+    # Phase B (graceful shutdown): gives the orchestrator at least
+    # ROBODULAR_SHUTDOWN_DRAIN_TIMEOUT_SECONDS + ROBODULAR_SHUTDOWN_KILL_TIMEOUT_SECONDS
+    # before SIGKILL. Defaults: 25 + 5 = 30s.
+    stop_grace_period: 30s
+    restart: unless-stopped
+    environment:
+      # --- gh-proxy channel ---
+      # The orchestrator NEVER holds GITHUB_TOKEN; it talks to the sibling
+      # gh-proxy container over the internal-only network.
+      ROBODULAR_GH_PROXY_URL: http://gh-proxy:8081
+      ROBODULAR_GH_PROXY_HMAC_KEY: ${ROBODULAR_GH_PROXY_HMAC_KEY:?ROBODULAR_GH_PROXY_HMAC_KEY must be set in .env}
+
+      # --- webhook + identity ---
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set in .env}
+      ROBODULAR_BOT_LOGIN: ${ROBODULAR_BOT_LOGIN:?ROBODULAR_BOT_LOGIN must be set in .env}
+      ROBODULAR_GIT_AUTHOR_NAME: ${ROBODULAR_GIT_AUTHOR_NAME:-}
+      ROBODULAR_GIT_AUTHOR_EMAIL: ${ROBODULAR_GIT_AUTHOR_EMAIL:?ROBODULAR_GIT_AUTHOR_EMAIL must be set in .env}
+      ROBODULAR_REPO_ALLOWLIST: ${ROBODULAR_REPO_ALLOWLIST:?ROBODULAR_REPO_ALLOWLIST must be set in .env}
+      ROBODULAR_MAINTAINER_LOGINS: ${ROBODULAR_MAINTAINER_LOGINS:-}
+      ROBODULAR_REVIEWER_BOTS: ${ROBODULAR_REVIEWER_BOTS:-}
+
+      # --- PR review / vouch gate ---
+      # When PRs are gated by the vouch GitHub Action, set the trigger to
+      # `vouched_label` so robodular reviews ONLY PRs that survive the gate
+      # (the workflow labels survivors `ROBODULAR_VOUCH_REVIEW_LABEL`), instead
+      # of racing the gate on PR open. `vouched_label` keeps review ENABLED.
+      ROBODULAR_PR_REVIEW_ENABLED: ${ROBODULAR_PR_REVIEW_ENABLED:-true}
+      ROBODULAR_PR_REVIEW_TRIGGER: ${ROBODULAR_PR_REVIEW_TRIGGER:-open}
+      ROBODULAR_VOUCH_REVIEW_LABEL: ${ROBODULAR_VOUCH_REVIEW_LABEL:-vouched}
+      ROBODULAR_VOUCH_REVIEW_LABELER: ${ROBODULAR_VOUCH_REVIEW_LABELER:-github-actions[bot]}
+
+      # --- model selection ---
+      ROBODULAR_MODEL: ${ROBODULAR_MODEL:-anthropic/claude-sonnet-4-6}
+      ROBODULAR_PROVIDER: ${ROBODULAR_PROVIDER:-}
+      ROBODULAR_THINKING: ${ROBODULAR_THINKING:-high}
+
+      # --- runtime tuning ---
+      ROBODULAR_MAX_CONCURRENCY: ${ROBODULAR_MAX_CONCURRENCY:-8}
+      ROBODULAR_TASK_TIMEOUT_SECONDS: ${ROBODULAR_TASK_TIMEOUT_SECONDS:-2400}
+      ROBODULAR_TASK_TIMEOUT_HARD_GRACE_SECONDS: ${ROBODULAR_TASK_TIMEOUT_HARD_GRACE_SECONDS:-60}
+      ROBODULAR_REQUEST_TIMEOUT_SECONDS: ${ROBODULAR_REQUEST_TIMEOUT_SECONDS:-120}
+      ROBODULAR_RATE_LIMIT_WINDOW_SECONDS: ${ROBODULAR_RATE_LIMIT_WINDOW_SECONDS:-3600}
+      ROBODULAR_RATE_LIMIT_DEFAULT: ${ROBODULAR_RATE_LIMIT_DEFAULT:-3}
+      ROBODULAR_RATE_LIMIT_CONTRIBUTOR: ${ROBODULAR_RATE_LIMIT_CONTRIBUTOR:-10}
+      ROBODULAR_RATE_LIMIT_UNLIMITED: ${ROBODULAR_RATE_LIMIT_UNLIMITED:-}
+      ROBODULAR_QUESTION_AUTOCLOSE_ENABLED: ${ROBODULAR_QUESTION_AUTOCLOSE_ENABLED:-true}
+      ROBODULAR_QUESTION_AUTOCLOSE_HOURS: ${ROBODULAR_QUESTION_AUTOCLOSE_HOURS:-4}
+      ROBODULAR_QUESTION_AUTOCLOSE_SCAN_SECONDS: ${ROBODULAR_QUESTION_AUTOCLOSE_SCAN_SECONDS:-60}
+      ROBODULAR_REPLAY_TOKEN: ${ROBODULAR_REPLAY_TOKEN:-}
+
+      # --- container-fixed paths ---
+      ROBODULAR_OMP_COMMAND: modular
+      ROBODULAR_WORKSPACE_ROOT: /data/workspaces
+      ROBODULAR_SQLITE_PATH: /data/robodular.sqlite
+      ROBODULAR_LOG_DIR: /data/logs
+      ROBODULAR_BIND_HOST: ${ROBODULAR_BIND_HOST:-0.0.0.0}
+      ROBODULAR_BIND_PORT: ${ROBODULAR_BIND_PORT:-8080}
+      PI_ROOT: /work/pi
+    depends_on:
+      gh-proxy:
+        condition: service_started
+    # Resolve `llm-gateway.internal` (used in /srv/agent-home/.modular/agent/models.yml) to the
+    # Docker host. The actual gateway listens on 127.0.0.1:4000 on the host;
+    # `host-gateway` is Docker's alias for the host bridge IP.
+    extra_hosts:
+      - "llm-gateway.internal:host-gateway"
+    networks:
+      - default
+      - robodular_internal
+    volumes:
+      - ${PI_ROOT:-../..}:/work/pi:ro
+      - robodular_data:/data
+      # Host agent config is mounted read-only under /srv/agent-home-stage
+      # with host-controlled permissions. The entrypoint copies it into
+      # root-owned, world-readable files under /srv/agent-home; the agent
+      # subprocess runs with HOME=/srv/agent-home, so ~/.modular and ~/.agent
+      # resolve there without exposing mutable host mounts.
+      - ${HOME}/.modular/agent/models.container.yml:/srv/agent-home-stage/.modular/agent/models.yml:ro
+      - ${HOME}/.agent/AGENT.md:/srv/agent-home-stage/.agent/AGENTS.md:ro
+      - ${HOME}/.agent/rules:/srv/agent-home-stage/.agent/rules:ro
+    ports:
+      - "0.0.0.0:6543:8080"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # gh-proxy
+  #
+  # The only container that ever holds GITHUB_TOKEN. Reachable only from the
+  # orchestrator on the internal-only network — no host port mapping. Every
+  # request must carry a valid HMAC signature (ROBODULAR_GH_PROXY_HMAC_KEY).
+  # `env_file:` is INTENTIONALLY ABSENT for the same reason: the explicit
+  # allowlist below is the only place where any var lands in this container.
+  # ───────────────────────────────────────────────────────────────────────────
+  gh-proxy:
+    image: robodular:dev
+    container_name: gh-proxy
+    restart: unless-stopped
+    command: ["python", "-m", "robodular.proxy", "serve"]
+    environment:
+      # PAT: lives ONLY here. The orchestrator's compose block refuses to
+      # let this var into its container.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:?GITHUB_TOKEN must be set in .env}
+      # Shared with the orchestrator: HMAC verification key.
+      ROBODULAR_GH_PROXY_HMAC_KEY: ${ROBODULAR_GH_PROXY_HMAC_KEY:?ROBODULAR_GH_PROXY_HMAC_KEY must be set in .env}
+      # The proxy reuses the SandboxManager pool layout under /data/workspaces.
+      ROBODULAR_WORKSPACE_ROOT: /data/workspaces
+      ROBODULAR_SQLITE_PATH: /data/robodular.sqlite
+      ROBODULAR_LOG_DIR: /data/logs
+      # Bind on the internal network only.
+      ROBODULAR_GH_PROXY_BIND_HOST: 0.0.0.0
+      ROBODULAR_GH_PROXY_BIND_PORT: 8081
+      # Settings still requires these on construction; the proxy never uses
+      # them but the validator runs the same code path as the orchestrator.
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?GITHUB_WEBHOOK_SECRET must be set in .env}
+      ROBODULAR_BOT_LOGIN: ${ROBODULAR_BOT_LOGIN:?ROBODULAR_BOT_LOGIN must be set in .env}
+      ROBODULAR_GIT_AUTHOR_EMAIL: ${ROBODULAR_GIT_AUTHOR_EMAIL:?ROBODULAR_GIT_AUTHOR_EMAIL must be set in .env}
+      ROBODULAR_REPO_ALLOWLIST: ${ROBODULAR_REPO_ALLOWLIST:?ROBODULAR_REPO_ALLOWLIST must be set in .env}
+    networks:
+      # `default` gives gh-proxy outbound NAT to api.github.com; `robodular_internal`
+      # is how the orchestrator reaches it. No `ports:` mapping → still
+      # unreachable from the host or any sibling project.
+      - default
+      - robodular_internal
+    volumes:
+      # Shared workspace pool/worktrees so the proxy can drive git operations
+      # against the same per-issue worktrees the orchestrator builds.
+      - robodular_data:/data
+
+networks:
+  # External-facing bridge: webhook ingress (8080) and the orchestrator's
+  # outbound path to the host LLM gateway via extra_hosts.
+  default: {}
+  # Orchestrator <-> gh-proxy only. internal: true means no egress and no
+  # ingress from outside the compose project.
+  robodular_internal:
+    internal: true
+
+volumes:
+  # Docker-managed Linux volume so UID/GID permissions on /data are enforced.
+  robodular_data: {}

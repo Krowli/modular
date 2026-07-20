@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1.7-labs
+###############################################################################
+# robodular — GitHub triage+fix bot orchestrator.
+#
+# Extends `pi-base` (from /Dockerfile, default target modular/pi:dev) and adds
+# the robodular Python package + a Vite-built SolidJS dashboard bundle. The pi
+# toolchain (python + bun + rustup launcher + pi-natives + modular_rpc wheel +
+# /usr/local/bin/modular shim) all comes from PI_BASE; this file only layers what's
+# robodular-specific.
+#
+# Build (from pi root):
+#     bun run pi:image                              # build modular/pi:dev first
+#     docker build -f Dockerfile.robodular -t robodular:dev .
+#
+# Compose (recommended):
+#     docker compose --project-directory python/robodular build
+###############################################################################
+
+ARG PI_BASE=modular/pi:dev
+ARG BUN_VERSION=1.3.14
+
+############################
+# 1) web-builder — Bun + Vite, builds the SolidJS dashboard bundle.
+############################
+FROM oven/bun:${BUN_VERSION}-slim AS web-builder
+WORKDIR /work
+# Root manifests + the web workspace manifest are enough for `bun install
+# --filter robodular-web` to hydrate just the dashboard's node_modules.
+COPY package.json bun.lock ./
+COPY python/robodular/web/package.json ./python/robodular/web/package.json
+# Root package.json declares patchedDependencies, so the patch file must be
+# present before any root-level `bun install` (even a filtered one).
+COPY patches/*.patch ./patches/
+RUN bun install --filter robodular-web
+COPY --exclude=node_modules --exclude=dist python/robodular/web/ ./python/robodular/web/
+RUN bun --cwd=python/robodular/web run build
+
+############################
+# 2) runtime — pi-base + robodular src + web bundle + pip install
+############################
+FROM ${PI_BASE} AS runtime
+
+# robodular runs against the host pi checkout mounted at /work/pi read-only.
+ENV PI_ROOT=/work/pi
+
+WORKDIR /app
+
+# robodular itself. Drop the Vite-built dashboard into the package tree before
+# `pip install` so it lands in the installed wheel (`static/**/*` is declared
+# as package-data in pyproject.toml).
+COPY python/robodular/pyproject.toml ./
+COPY python/robodular/src/ ./src/
+COPY --from=web-builder /work/python/robodular/web/dist/ ./src/static/
+
+RUN pip install --no-cache-dir \
+        "fastapi>=0.112" "uvicorn[standard]>=0.30" "httpx>=0.27" \
+        "pydantic>=2.6" "pydantic-settings>=2.2" "python-dotenv>=1.0" \
+        "click>=8.1" \
+    && pip install --no-cache-dir --no-deps .
+
+# Host agent config is mounted read-only under /srv/agent-home-stage with
+# host-controlled permissions. The entrypoint copies it into root-owned
+# world-readable files under /srv/agent-home; the agent subprocess runs with
+# HOME=/srv/agent-home, so ~/.modular and ~/.agent resolve there without exposing
+# mutable host mounts.
+RUN mkdir -p /srv/agent-home/.agent /srv/agent-home/.modular/agent \
+    && mkdir -p /srv/agent-home-stage/.agent /srv/agent-home-stage/.modular/agent \
+    && printf '[install]\nbackend = "copyfile"\n' > /srv/agent-home/.bunfig.toml
+
+COPY python/robodular/entrypoint.sh /usr/local/bin/robodular-entrypoint
+RUN chmod +x /usr/local/bin/robodular-entrypoint
+
+VOLUME ["/data"]
+EXPOSE 8080
+EXPOSE 8081
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/robodular-entrypoint"]
+CMD ["python", "-m", "robodular", "serve"]
