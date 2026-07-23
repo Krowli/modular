@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the installed CLI command from `mod` to `modc` (npm/bun `bin` and the source/binary install scripts) to avoid a collision with another `mod` executable.
+
 ## [16.5.1] - 2026-07-14
 
 ### Changed

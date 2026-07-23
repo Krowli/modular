@@ -240,11 +240,11 @@ function Install-ViaBun {
     }
 
     Write-Host ""
-    Write-Host "✓ Installed mod via bun" -ForegroundColor Green
+    Write-Host "✓ Installed modc via bun" -ForegroundColor Green
 
     Configure-BashShell
 
-    Write-Host "Run 'mod' to get started!"
+    Write-Host "Run 'modc' to get started!"
 }
 
 function Install-Binary {
@@ -271,11 +271,11 @@ function Install-Binary {
     # Download binary
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Latest/$BinaryName"
     Write-Host "Downloading $BinaryName..."
-    $OutPath = Join-Path $InstallDir "mod.exe"
+    $OutPath = Join-Path $InstallDir "modc.exe"
     Invoke-WebRequest -Uri $BinaryUrl -OutFile $OutPath -TimeoutSec 900
 
     Write-Host ""
-    Write-Host "✓ Installed mod to $OutPath" -ForegroundColor Green
+    Write-Host "✓ Installed modc to $OutPath" -ForegroundColor Green
 
     # Add to PATH if not already there
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -288,9 +288,9 @@ function Install-Binary {
     Configure-BashShell
 
     if ($needsRestart) {
-        Write-Host "Restart your terminal, then run 'mod' to get started!"
+        Write-Host "Restart your terminal, then run 'modc' to get started!"
     } else {
-        Write-Host "Run 'mod' to get started!"
+        Write-Host "Run 'modc' to get started!"
     }
 }
 

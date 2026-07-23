@@ -189,8 +189,8 @@ install_via_bun() {
         }
     fi
     echo ""
-    echo "✓ Installed mod via bun"
-    echo "Run 'mod' to get started!"
+    echo "✓ Installed modc via bun"
+    echo "Run 'modc' to get started!"
 }
 
 # Install binary from GitHub releases
@@ -238,15 +238,15 @@ install_binary() {
     # Download binary
     BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}"
     echo "Downloading ${BINARY}..."
-    curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 30 "$BINARY_URL" -o "${INSTALL_DIR}/mod"
-    chmod +x "${INSTALL_DIR}/mod"
+    curl -fsSL --connect-timeout 10 --speed-limit 1024 --speed-time 30 "$BINARY_URL" -o "${INSTALL_DIR}/modc"
+    chmod +x "${INSTALL_DIR}/modc"
     echo ""
-    echo "✓ Installed mod to ${INSTALL_DIR}/mod"
+    echo "✓ Installed modc to ${INSTALL_DIR}/modc"
 
     # Check if in PATH
     case ":$PATH:" in
-        *":$INSTALL_DIR:"*) echo "Run 'mod' to get started!" ;;
-        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'mod'" ;;
+        *":$INSTALL_DIR:"*) echo "Run 'modc' to get started!" ;;
+        *) echo "Add ${INSTALL_DIR} to your PATH, then run 'modc'" ;;
     esac
 }
 
