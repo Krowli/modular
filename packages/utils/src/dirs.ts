@@ -16,8 +16,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { engines, version } from "../package.json" with { type: "json" };
 
-/** CLI command / binary name (e.g. "mod") */
-export const APP_NAME: string = "mod";
+/** CLI command / binary name (e.g. "modc") */
+export const APP_NAME: string = "modc";
 
 /** Brand display name for UI / logo (e.g. "modular") */
 export const APP_DISPLAY_NAME: string = "modular";
